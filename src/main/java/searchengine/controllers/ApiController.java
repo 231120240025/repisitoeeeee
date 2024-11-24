@@ -17,8 +17,16 @@ public class ApiController {
         this.statisticsService = statisticsService;
     }
 
+    /**
+     * API для получения статистики поискового движка.
+     * Формирует и возвращает общую информацию о состоянии индексации.
+     *
+     * @return ResponseEntity с результатами статистики
+     */
     @GetMapping("/statistics")
-    public ResponseEntity<StatisticsResponse> statistics() {
-        return ResponseEntity.ok(statisticsService.getStatistics());
+    public ResponseEntity<StatisticsResponse> getStatistics() {
+        // Вызов сервиса для расчета статистики
+        StatisticsResponse response = statisticsService.getStatistics();
+        return ResponseEntity.ok(response);
     }
 }

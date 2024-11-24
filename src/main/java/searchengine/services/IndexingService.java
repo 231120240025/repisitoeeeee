@@ -277,14 +277,24 @@ public class IndexingService {
 
             try {
                 logger.debug("Обработка страницы: {}", url);
-                org.jsoup.nodes.Document document = Jsoup.connect(url)
+                org.jsoup.Connection.Response response = Jsoup.connect(url)
                         .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                         .referrer("http://www.google.com")
-                        .get();
-                String content = document.html();
-                savePage(url, 200, content, site);
+                        .execute();
 
-                Elements links = document.select("a[href]");
+                int statusCode = response.statusCode();
+                if (statusCode >= 400) {
+                    logger.warn("Пропуск страницы {} из-за ошибочного HTTP-кода: {}", url, statusCode);
+                    return; // Не индексируем страницу с кодом ошибки
+                }
+
+                String content = response.parse().html();
+
+                // Лемматизация и сохранение данных
+                Map<String, Integer> lemmas = extractLemmas(content);
+                IndexingService.this.savePageAndLemmas(url, statusCode, content, lemmas, site);
+
+                Elements links = response.parse().select("a[href]");
                 Set<PageCrawlerTask> tasks = new HashSet<>();
                 for (Element link : links) {
                     String href = link.absUrl("href");
@@ -295,7 +305,6 @@ public class IndexingService {
                 invokeAll(tasks);
             } catch (Exception e) {
                 logger.error("Ошибка при обработке страницы {}: {}", url, e.getMessage());
-                savePage(url, 500, "Ошибка загрузки страницы.", site);
             }
         }
 
@@ -309,12 +318,27 @@ public class IndexingService {
         }
     }
 
+
+
     private void updateSiteStatus(Site site, Status status, String error) {
         site.setStatus(status);
         site.setStatusTime(LocalDateTime.now());
         site.setLastError(error);
         siteRepository.save(site);
         logger.debug("Обновлен статус сайта {}: {}", site.getUrl(), status);
+    }
+
+    private void savePageAndLemmas(String url, int statusCode, String content, Map<String, Integer> lemmas, Site site) {
+        // Сохранение страницы
+        Page page = new Page();
+        page.setPath(url.replace(site.getUrl(), ""));
+        page.setCode(statusCode);
+        page.setContent(content);
+        page.setSite(site);
+        pageRepository.save(page);
+
+        // Сохранение лемм и индексов
+        saveLemmasAndIndexes(lemmas, page, site);
     }
 
 
