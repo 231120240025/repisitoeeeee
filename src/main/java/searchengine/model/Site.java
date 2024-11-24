@@ -17,8 +17,8 @@ public class Site {
     @Column(name = "id", nullable = false)
     private int id;
 
-    @Column(name = "status", nullable = false, columnDefinition = "ENUM('INDEXING', 'INDEXED', 'FAILED')")
     @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
     private Status status;
 
     @Column(name = "status_time", nullable = false)
@@ -27,9 +27,9 @@ public class Site {
     @Column(name = "last_error", columnDefinition = "TEXT")
     private String lastError;
 
-    @Column(name = "url", nullable = false, columnDefinition = "VARCHAR(255)")
+    @Column(name = "url", nullable = false, unique = true, length = 255)
     private String url;
 
-    @Column(name = "name", nullable = false, columnDefinition = "VARCHAR(255)")
+    @Column(name = "name", nullable = false, length = 255)
     private String name;
 }

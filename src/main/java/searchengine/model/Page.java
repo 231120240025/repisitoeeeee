@@ -7,7 +7,7 @@ import jakarta.persistence.Index;
 
 @Entity
 @Table(name = "page", indexes = {
-        @Index(name = "idx_path", columnList = "path") // Индекс на поле path
+        @Index(name = "idx_path_prefix", columnList = "pathPrefix")
 })
 @Data
 @NoArgsConstructor
@@ -20,14 +20,23 @@ public class Page {
 
     @ManyToOne
     @JoinColumn(name = "site_id", nullable = false)
-    private Site site; // Внешний ключ, связывающий с таблицей site
+    private Site site;
 
     @Column(name = "path", nullable = false, columnDefinition = "TEXT")
     private String path;
+
+    @Column(name = "path_prefix", nullable = false, length = 255)
+    private String pathPrefix;
 
     @Column(name = "code", nullable = false)
     private int code;
 
     @Column(name = "content", nullable = false, columnDefinition = "MEDIUMTEXT")
     private String content;
+
+    @PrePersist
+    @PreUpdate
+    private void updatePathPrefix() {
+        this.pathPrefix = path.length() > 255 ? path.substring(0, 255) : path;
+    }
 }
