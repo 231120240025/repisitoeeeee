@@ -28,24 +28,53 @@ public class IndexingPageService {
 
     @Transactional
     public void indexPage(String url, Site site) {
+        log.info("Начало индексации страницы: {}", url);
+
         try {
-            log.info("Начало индексации страницы: {}", url);
+            // Удаление предыдущей информации о странице, если она уже была проиндексирована
+            deleteExistingPageData(url, site);
 
-            // Шаг 1: Загрузка HTML
             String htmlContent = fetchHtmlContent(url);
-
-            // Шаг 2: Сохранение страницы
             Page page = savePage(url, site, htmlContent);
-
-            // Шаг 3: Извлечение лемм
             Map<String, Integer> lemmas = extractLemmas(htmlContent);
-
-            // Шаг 4: Сохранение лемм и индексов
             saveLemmasAndIndexes(page, lemmas);
 
             log.info("Индексация страницы завершена: {}", url);
         } catch (Exception e) {
             log.error("Ошибка индексации страницы: {}", url, e);
+            throw new RuntimeException("Ошибка индексации: " + e.getMessage(), e);
+        }
+    }
+
+    private void deleteExistingPageData(String url, Site site) {
+        log.info("Проверка на наличие данных для удаления о странице: {}", url);
+
+        Optional<Page> existingPage = pageRepository.findByPathAndSite(url, site);
+        if (existingPage.isPresent()) {
+            Page page = existingPage.get();
+            log.info("Удаление данных для страницы: {}", page.getPath());
+
+            // Удаление связанных индексов
+            List<Index> indexes = indexRepository.findAllByPage(page);
+            indexRepository.deleteAll(indexes);
+
+            // Обновление `frequency` для связанных лемм
+            Set<Lemma> affectedLemmas = new HashSet<>();
+            indexes.forEach(index -> affectedLemmas.add(index.getLemma()));
+            affectedLemmas.forEach(lemma -> {
+                lemma.setFrequency(lemma.getFrequency() - 1);
+                if (lemma.getFrequency() <= 0) {
+                    lemmaRepository.delete(lemma);
+                } else {
+                    lemmaRepository.save(lemma);
+                }
+            });
+
+            // Удаление страницы
+            pageRepository.delete(page);
+            log.info("Данные для страницы {} успешно удалены.", url);
+        } else {
+            log.info("Данные для страницы {} отсутствуют.", url);
         }
     }
 
@@ -56,7 +85,7 @@ public class IndexingPageService {
             return document.html();
         } catch (IOException e) {
             log.error("Ошибка загрузки HTML для: {}", url, e);
-            throw new RuntimeException("Не удалось загрузить содержимое страницы: " + url, e);
+            throw new RuntimeException("Не удалось загрузить HTML содержимое: " + url, e);
         }
     }
 
@@ -118,13 +147,11 @@ public class IndexingPageService {
             indexes.add(index);
         }
 
-        // Сохранение новых лемм в базе
         if (!newLemmas.isEmpty()) {
             lemmaRepository.saveAll(newLemmas);
             log.info("Сохранено новых лемм: {}", newLemmas.size());
         }
 
-        // Батчевое сохранение индексов
         indexRepository.saveAll(indexes);
         log.info("Сохранено {} индексов для страницы: {}", indexes.size(), page.getPath());
     }

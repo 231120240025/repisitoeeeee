@@ -6,40 +6,69 @@ import lombok.NoArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
+import searchengine.model.Site;
+import searchengine.repositories.SiteRepository;
+import searchengine.services.IndexingPageService;
+import lombok.extern.slf4j.Slf4j;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.List;
 
+
+@Slf4j
 @RestController
 @RequestMapping("/api")
+@AllArgsConstructor
 public class IndexPageController {
 
-    private static final List<String> ALLOWED_DOMAINS = List.of("example.com", "another-example.com");
+    private final IndexingPageService indexingPageService;
+    private final SiteRepository siteRepository;
 
     @PostMapping("/indexPage")
     public ResponseEntity<IndexPageResponse> indexPage(@RequestBody IndexPageRequest request) {
         String url = request.getUrl();
-        if (url == null || url.isBlank() || !isUrlAllowed(url)) {
+        if (url == null || url.isBlank()) {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
-                    .body(new IndexPageResponse(false, "Данная страница находится за пределами сайтов, указанных в конфигурационном файле"));
+                    .body(new IndexPageResponse(false, "URL страницы не указан"));
         }
-        return ResponseEntity.ok(new IndexPageResponse(true, null));
+
+        // Проверка, принадлежит ли URL одному из разрешённых доменов
+        Site site = getMatchingSite(url);
+        if (site == null) {
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(new IndexPageResponse(false, "URL не соответствует разрешённым доменам"));
+        }
+
+        try {
+            indexingPageService.indexPage(url, site);
+            return ResponseEntity.ok(new IndexPageResponse(true, null));
+        } catch (Exception e) {
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new IndexPageResponse(false, "Ошибка индексации: " + e.getMessage()));
+        }
     }
 
-    private boolean isUrlAllowed(String url) {
+    private Site getMatchingSite(String url) {
         try {
             URI uri = new URI(url);
             String host = uri.getHost();
             if (host == null) {
-                return false;
+                return null;
             }
-            return ALLOWED_DOMAINS.stream().anyMatch(host::endsWith);
+
+            return siteRepository.findAll().stream()
+                    .filter(site -> host.endsWith(URI.create(site.getUrl()).getHost()))
+                    .findFirst()
+                    .orElse(null);
         } catch (URISyntaxException e) {
-            return false;
+            log.error("Некорректный URL: {}", url, e);
+            return null;
         }
     }
+
+
 
     @Data
     @NoArgsConstructor

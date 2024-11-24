@@ -5,7 +5,7 @@ import lombok.Data;
 
 @Data
 @Entity
-@Table(name = "index_table", uniqueConstraints = {
+@Table(name = "`index`", uniqueConstraints = {
         @UniqueConstraint(columnNames = {"page_id", "lemma_id"})
 })
 public class Index {
@@ -22,6 +22,6 @@ public class Index {
     @JoinColumn(name = "lemma_id", nullable = false)
     private Lemma lemma;
 
-    @Column(nullable = false)
+    @Column(name = "`rank`", nullable = false) // Указываем имя столбца в обратных кавычках
     private float rank;
 }
