@@ -1,5 +1,6 @@
 package searchengine.services;
 
+import org.apache.lucene.morphology.russian.RussianMorphology;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
@@ -8,21 +9,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import searchengine.config.SitesList;
-import searchengine.model.Page;
-import searchengine.model.Site;
-import searchengine.model.Status;
-import searchengine.repositories.PageRepository;
-import searchengine.repositories.SiteRepository;
-
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.RecursiveAction;
-import java.time.LocalDateTime;
-import java.util.HashSet;
-import java.util.Set;
+import searchengine.model.*;
+import searchengine.repositories.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 @Service
 public class IndexingService {
@@ -33,15 +27,21 @@ public class IndexingService {
     private final SitesList sitesList;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
+    private final LemmaRepository lemmaRepository;
+    private final IndexRepository indexRepository;
 
     private volatile boolean stopRequested = false;
     private final Object stopLock = new Object();
 
     @Autowired
-    public IndexingService(SitesList sitesList, SiteRepository siteRepository, PageRepository pageRepository) {
+    public IndexingService(SitesList sitesList, SiteRepository siteRepository,
+                           PageRepository pageRepository, LemmaRepository lemmaRepository,
+                           IndexRepository indexRepository) {
         this.sitesList = sitesList;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
+        this.lemmaRepository = lemmaRepository;
+        this.indexRepository = indexRepository;
     }
 
     public boolean isIndexingRunning() {
@@ -104,11 +104,14 @@ public class IndexingService {
                     logger.info("Индексация сайта: {} завершена за {} ms", siteConfig.getName(), elapsedTime);
                 }
             }));
+        } catch (Exception e) {
+            logger.error("Ошибка выполнения ExecutorService", e);
         } finally {
             executorService.shutdown();
             try {
                 if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
                     logger.warn("ExecutorService не завершился корректно за 60 секунд.");
+                    executorService.shutdownNow(); // Принудительное завершение
                 }
             } catch (InterruptedException e) {
                 logger.error("Ошибка при ожидании завершения ExecutorService", e);
@@ -116,6 +119,8 @@ public class IndexingService {
             }
         }
     }
+
+
 
     @SuppressWarnings("resource")
     private void crawlSite(String url, Site site) {
@@ -136,12 +141,106 @@ public class IndexingService {
             try {
                 if (!forkJoinPool.awaitTermination(60, TimeUnit.SECONDS)) {
                     logger.warn("ForkJoinPool не завершился корректно за 60 секунд.");
+                    forkJoinPool.shutdownNow(); // Принудительное завершение
                 }
             } catch (InterruptedException e) {
                 logger.error("Ошибка при ожидании завершения ForkJoinPool", e);
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+
+
+
+    private Map<String, Integer> extractLemmas(String text) {
+        Map<String, Integer> lemmaCounts = new HashMap<>();
+        try {
+            RussianMorphology morphology = new RussianMorphology();
+            String[] words = text.toLowerCase().replaceAll("[^а-яёa-z\\s]", "").split("\\s+");
+            for (String word : words) {
+                if (!word.isEmpty()) {
+                    List<String> lemmas = morphology.getNormalForms(word);
+                    for (String lemma : lemmas) {
+                        lemmaCounts.put(lemma, lemmaCounts.getOrDefault(lemma, 0) + 1);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Ошибка при лемматизации текста: {}", e.getMessage());
+        }
+        return lemmaCounts;
+    }
+
+    private void savePage(String url, int statusCode, String content, Site site) {
+        if (content == null || content.isEmpty()) {
+            content = "Содержимое страницы недоступно.";
+        }
+        Page page = new Page();
+        page.setPath(url.replace(site.getUrl(), ""));
+        page.setCode(statusCode);
+        page.setContent(content);
+        page.setSite(site);
+        pageRepository.save(page);
+
+        Map<String, Integer> lemmas = extractLemmas(content);
+        saveLemmasAndIndexes(lemmas, page, site);
+
+        logger.debug("Сохранена страница: {} с кодом: {}", url, statusCode);
+    }
+
+    private void saveLemmasAndIndexes(Map<String, Integer> lemmas, Page page, Site site) {
+        // Получение существующих лемм с частотой
+        Map<String, Lemma> existingLemmas = lemmaRepository.findBySite(site).stream()
+                .collect(Collectors.toMap(Lemma::getLemma, lemma -> lemma));
+
+        for (Map.Entry<String, Integer> entry : lemmas.entrySet()) {
+            String lemmaText = entry.getKey();
+            int count = entry.getValue();
+
+            // Использовать существующую лемму или создать новую
+            Lemma lemma = existingLemmas.getOrDefault(lemmaText, new Lemma());
+            if (!existingLemmas.containsKey(lemmaText)) {
+                lemma.setLemma(lemmaText);
+                lemma.setSite(site);
+            }
+
+            // Увеличение частоты
+            lemma.setFrequency(lemma.getFrequency() + count);
+            lemmaRepository.save(lemma);
+
+            // Добавить сохранённую лемму в карту для повторного использования
+            existingLemmas.putIfAbsent(lemmaText, lemma);
+
+            // Сохранение индекса
+            Index index = new Index();
+            index.setLemma(lemma);
+            index.setPage(page);
+            index.setRank(count);
+            indexRepository.save(index);
+        }
+    }
+
+
+
+
+    private void deleteSiteData(String siteUrl) {
+        siteRepository.findByUrl(siteUrl).ifPresent(site -> {
+            pageRepository.deleteBySite(site);
+            siteRepository.deleteById((long) site.getId());
+            logger.debug("Удалены данные для сайта: {}", siteUrl);
+        });
+    }
+
+    private Site createNewSiteRecord(String name, String url) {
+        Site site = new Site();
+        site.setName(name);
+        site.setUrl(url);
+        site.setStatus(Status.INDEXING);
+        site.setStatusTime(LocalDateTime.now());
+        siteRepository.save(site);
+        logger.debug("Создана запись для сайта: {} ({})", name, url);
+        return site;
     }
 
     private void updateFailedStatusForIncompleteSites() {
@@ -210,38 +309,6 @@ public class IndexingService {
         }
     }
 
-    private void savePage(String url, int statusCode, String content, Site site) {
-        if (content == null || content.isEmpty()) {
-            content = "Содержимое страницы недоступно.";
-        }
-        Page page = new Page();
-        page.setPath(url.replace(site.getUrl(), ""));
-        page.setCode(statusCode);
-        page.setContent(content);
-        page.setSite(site);
-        pageRepository.save(page);
-        logger.debug("Сохранена страница: {} с кодом: {}", url, statusCode);
-    }
-
-    private void deleteSiteData(String siteUrl) {
-        siteRepository.findByUrl(siteUrl).ifPresent(site -> {
-            pageRepository.deleteBySite(site);
-            siteRepository.deleteById((long) site.getId());
-            logger.debug("Удалены данные для сайта: {}", siteUrl);
-        });
-    }
-
-    private Site createNewSiteRecord(String name, String url) {
-        Site site = new Site();
-        site.setName(name);
-        site.setUrl(url);
-        site.setStatus(Status.INDEXING);
-        site.setStatusTime(LocalDateTime.now());
-        siteRepository.save(site);
-        logger.debug("Создана запись для сайта: {} ({})", name, url);
-        return site;
-    }
-
     private void updateSiteStatus(Site site, Status status, String error) {
         site.setStatus(status);
         site.setStatusTime(LocalDateTime.now());
@@ -249,4 +316,6 @@ public class IndexingService {
         siteRepository.save(site);
         logger.debug("Обновлен статус сайта {}: {}", site.getUrl(), status);
     }
+
+
 }

@@ -22,6 +22,5 @@ public class Lemma {
     private String lemma;
 
     @Column(nullable = false)
-    private int frequency;
+    private int frequency = 0; // Значение по умолчанию
 }
-
