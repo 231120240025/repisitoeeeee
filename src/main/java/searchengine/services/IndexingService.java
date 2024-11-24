@@ -50,15 +50,18 @@ public class IndexingService {
 
     public void startIndexing() {
         if (isIndexing.compareAndSet(false, true)) {
-            stopRequested = false; // Сбрасываем состояние остановки
+            stopRequested = false;
             new Thread(() -> {
                 try {
+                    logger.info("Запуск процесса индексации...");
                     performIndexing();
+                    logger.info("Процесс индексации завершен.");
                 } finally {
                     isIndexing.set(false);
                 }
             }).start();
         } else {
+            logger.warn("Попытка запуска индексации, когда она уже запущена.");
             throw new IllegalStateException("Индексация уже запущена");
         }
     }
@@ -66,10 +69,11 @@ public class IndexingService {
     public void stopIndexing() {
         synchronized (stopLock) {
             if (!isIndexing.get()) {
+                logger.warn("Попытка остановки индексации, когда она не запущена.");
                 throw new IllegalStateException("Индексация не запущена");
             }
             stopRequested = true;
-            logger.info("Индексация остановлена пользователем");
+            logger.info("Процесс индексации был остановлен пользователем.");
             updateFailedStatusForIncompleteSites();
         }
     }
@@ -78,31 +82,33 @@ public class IndexingService {
     private void performIndexing() {
         ExecutorService executorService = Executors.newFixedThreadPool(sitesList.getSites().size());
         try {
-            sitesList.getSites().forEach(siteConfig ->
-                    executorService.submit(() -> { // Запуск каждой индексации в отдельном потоке
-                        logger.info("Начало обработки сайта: {} ({})", siteConfig.getName(), siteConfig.getUrl());
-                        deleteSiteData(siteConfig.getUrl());
-                        logger.info("Данные сайта удалены: {} ({})", siteConfig.getName(), siteConfig.getUrl());
+            sitesList.getSites().forEach(siteConfig -> executorService.submit(() -> {
+                long startTime = System.currentTimeMillis();
+                logger.info("Начало обработки сайта: {} ({})", siteConfig.getName(), siteConfig.getUrl());
+                deleteSiteData(siteConfig.getUrl());
+                logger.info("Данные сайта удалены: {} ({})", siteConfig.getName(), siteConfig.getUrl());
 
-                        Site site = createNewSiteRecord(siteConfig.getName(), siteConfig.getUrl());
+                Site site = createNewSiteRecord(siteConfig.getName(), siteConfig.getUrl());
 
-                        try {
-                            crawlSite(siteConfig.getUrl(), site); // Запуск обхода страниц
-                            if (!stopRequested) {
-                                logger.info("Индексация завершена успешно для сайта: {} ({})", siteConfig.getName(), siteConfig.getUrl());
-                                updateSiteStatus(site, Status.INDEXED, null);
-                            }
-                        } catch (Exception e) {
-                            logger.error("Ошибка при индексации сайта: {} ({})", siteConfig.getName(), siteConfig.getUrl(), e);
-                            updateSiteStatus(site, Status.FAILED, e.getMessage());
-                        }
-                    })
-            );
+                try {
+                    crawlSite(siteConfig.getUrl(), site);
+                    if (!stopRequested) {
+                        logger.info("Индексация завершена для сайта: {} ({})", siteConfig.getName(), siteConfig.getUrl());
+                        updateSiteStatus(site, Status.INDEXED, null);
+                    }
+                } catch (Exception e) {
+                    logger.error("Ошибка при индексации сайта: {} ({}): {}", siteConfig.getName(), siteConfig.getUrl(), e.getMessage());
+                    updateSiteStatus(site, Status.FAILED, e.getMessage());
+                } finally {
+                    long elapsedTime = System.currentTimeMillis() - startTime;
+                    logger.info("Индексация сайта: {} завершена за {} ms", siteConfig.getName(), elapsedTime);
+                }
+            }));
         } finally {
             executorService.shutdown();
             try {
                 if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                    logger.warn("ExecutorService не завершился корректно за 60 секунд");
+                    logger.warn("ExecutorService не завершился корректно за 60 секунд.");
                 }
             } catch (InterruptedException e) {
                 logger.error("Ошибка при ожидании завершения ExecutorService", e);
@@ -111,22 +117,25 @@ public class IndexingService {
         }
     }
 
-    @SuppressWarnings("resource") // Подавляем предупреждение о try-with-resources
+    @SuppressWarnings("resource")
     private void crawlSite(String url, Site site) {
         if (stopRequested) {
+            logger.warn("Обход сайта {} остановлен из-за остановки индексации.", site.getUrl());
             return;
         }
         Set<String> visitedUrls = new HashSet<>();
         ForkJoinPool forkJoinPool = new ForkJoinPool();
         try {
+            logger.info("Запуск обхода сайта: {}", site.getUrl());
             forkJoinPool.invoke(new PageCrawlerTask(url, site, visitedUrls));
+            logger.info("Обход сайта завершен: {}", site.getUrl());
         } catch (Exception e) {
-            logger.error("Ошибка при работе ForkJoinPool: {}", e.getMessage(), e);
+            logger.error("Ошибка при работе ForkJoinPool для сайта {}: {}", site.getUrl(), e.getMessage());
         } finally {
             forkJoinPool.shutdown();
             try {
                 if (!forkJoinPool.awaitTermination(60, TimeUnit.SECONDS)) {
-                    logger.warn("ForkJoinPool не завершился корректно за 60 секунд");
+                    logger.warn("ForkJoinPool не завершился корректно за 60 секунд.");
                 }
             } catch (InterruptedException e) {
                 logger.error("Ошибка при ожидании завершения ForkJoinPool", e);
@@ -134,8 +143,6 @@ public class IndexingService {
             }
         }
     }
-
-
 
     private void updateFailedStatusForIncompleteSites() {
         String errorMessage = "Индексация остановлена пользователем";
@@ -170,8 +177,9 @@ public class IndexingService {
             visitedUrls.add(url);
 
             try {
+                logger.debug("Обработка страницы: {}", url);
                 org.jsoup.nodes.Document document = Jsoup.connect(url)
-                        .userAgent("Mozilla/5.0 (Windows; U; WindowsNT 5.1; en-US; rv:1.8.1.6) Gecko/20070725 Firefox/2.0.0.6")
+                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                         .referrer("http://www.google.com")
                         .get();
                 String content = document.html();
@@ -187,29 +195,39 @@ public class IndexingService {
                 }
                 invokeAll(tasks);
             } catch (Exception e) {
-                savePage(url, 500, null, site);
+                logger.error("Ошибка при обработке страницы {}: {}", url, e.getMessage());
+                savePage(url, 500, "Ошибка загрузки страницы.", site);
             }
         }
 
         private boolean isPageAlreadyIndexed(String url, Site site) {
             String relativePath = url.replace(site.getUrl(), "");
-            return pageRepository.existsByPathAndSite(relativePath, site);
+            boolean exists = pageRepository.existsByPathAndSite(relativePath, site);
+            if (exists) {
+                logger.debug("Страница уже проиндексирована: {}", url);
+            }
+            return exists;
         }
     }
 
     private void savePage(String url, int statusCode, String content, Site site) {
+        if (content == null || content.isEmpty()) {
+            content = "Содержимое страницы недоступно.";
+        }
         Page page = new Page();
         page.setPath(url.replace(site.getUrl(), ""));
         page.setCode(statusCode);
         page.setContent(content);
         page.setSite(site);
         pageRepository.save(page);
+        logger.debug("Сохранена страница: {} с кодом: {}", url, statusCode);
     }
 
     private void deleteSiteData(String siteUrl) {
         siteRepository.findByUrl(siteUrl).ifPresent(site -> {
             pageRepository.deleteBySite(site);
             siteRepository.deleteById((long) site.getId());
+            logger.debug("Удалены данные для сайта: {}", siteUrl);
         });
     }
 
@@ -220,6 +238,7 @@ public class IndexingService {
         site.setStatus(Status.INDEXING);
         site.setStatusTime(LocalDateTime.now());
         siteRepository.save(site);
+        logger.debug("Создана запись для сайта: {} ({})", name, url);
         return site;
     }
 
@@ -228,5 +247,6 @@ public class IndexingService {
         site.setStatusTime(LocalDateTime.now());
         site.setLastError(error);
         siteRepository.save(site);
+        logger.debug("Обновлен статус сайта {}: {}", site.getUrl(), status);
     }
 }
