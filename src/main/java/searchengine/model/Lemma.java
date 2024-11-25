@@ -14,7 +14,7 @@ public class Lemma {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "site_id", nullable = false)
     private Site site;
 
@@ -22,5 +22,5 @@ public class Lemma {
     private String lemma;
 
     @Column(nullable = false)
-    private int frequency = 0; // Значение по умолчанию
+    private int frequency = 0;
 }

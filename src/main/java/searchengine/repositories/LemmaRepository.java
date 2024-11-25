@@ -13,5 +13,6 @@ public interface LemmaRepository extends JpaRepository<Lemma, Integer> {
     Optional<Lemma> findByLemmaAndSiteId(String lemma, int siteId); // Находит лемму по тексту и ID сайта
     List<Lemma> findBySite(Site site);// Находит все леммы для сайта
     Optional<Lemma> findByLemmaAndSite(String lemma, Site site);
+    void deleteAllBySite(Site site);
 
 }

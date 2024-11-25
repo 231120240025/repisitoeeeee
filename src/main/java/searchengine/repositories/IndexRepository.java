@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import searchengine.model.Index;
 import searchengine.model.Page;
+import searchengine.model.Lemma;
 
 import java.util.List;
 
@@ -15,4 +16,7 @@ public interface IndexRepository extends JpaRepository<Index, Integer> {
 
     // Удаляет все индексы, связанные с конкретной страницей
     void deleteAllByPage(Page page);
+
+    // Удаляет все индексы, связанные с конкретной леммой
+    void deleteAllByLemma(Lemma lemma);
 }

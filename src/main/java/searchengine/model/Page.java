@@ -3,11 +3,10 @@ package searchengine.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import jakarta.persistence.Index;
 
 @Entity
 @Table(name = "page", indexes = {
-        @Index(name = "idx_path_prefix", columnList = "pathPrefix")
+        @jakarta.persistence.Index(name = "idx_path_prefix", columnList = "pathPrefix")
 })
 @Data
 @NoArgsConstructor
@@ -18,7 +17,7 @@ public class Page {
     @Column(name = "id", nullable = false)
     private int id;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "site_id", nullable = false)
     private Site site;
 
